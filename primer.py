@@ -183,10 +183,11 @@ def set_anchor(cfg: dict, reset_str: str, tz: str | None = None) -> dict:
     reset_today = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
     margin = timedelta(minutes=cfg["margin_minutes"])
-    cycle = timedelta(minutes=cfg["cycle_minutes"])
+    # First prime lands on the next occurrence of the given clock time.
+    # After that, do_prime() chains every cycle from the actual prime moment.
     first_prime = reset_today + margin
     while first_prime <= now:
-        first_prime += cycle
+        first_prime += timedelta(days=1)
 
     state = load_state()
     state.update({
@@ -277,7 +278,8 @@ def do_prime(cfg: dict, state: dict, *, reason: str) -> None:
                     f"🕐 Now: {fmt(now, cfg)}\n"
                     "♻️ New 5-hour window is active\n"
                     f"⏳ Resets: <b>{fmt(next_reset, cfg)}</b>\n"
-                    f"🤖 Next prime: {fmt(next_prime, cfg)}")
+                    f"🤖 Next prime: {fmt(next_prime, cfg)}\n"
+                    "🔗 Chain anchored here (the only active schedule)")
     else:
         log(f"PRIME FAIL ({reason}): {detail}")
         if cfg.get("notify_on_failure"):
@@ -299,13 +301,17 @@ def tick_once(cfg: dict, state: dict) -> None:
 # --------------------------------------------------------------------------- #
 HELP = (
     "🤖 <b>claude-limit-primer</b>\n"
-    "Keeps your Claude Code limits running and sends notifications.\n\n"
+    "Keeps your Claude Code limits running and notifies you.\n\n"
+    "<b>Model:</b> there is always exactly ONE schedule. Your last command is "
+    "the single source of truth and fully replaces the previous one. After each "
+    "prime the chain continues every 5h automatically.\n\n"
     "<b>Commands:</b>\n"
-    "/init HH:MM [Zone] - set the reset time (anchor)\n"
+    "/prime - limits reset now: prime &amp; start the chain from now\n"
+    "/reset - same as /prime (a quick \"it just reset\" button)\n"
+    "/init HH:MM [Zone] - schedule the first prime at a clock time\n"
     "   e.g. <code>/init 02:00 Europe/Moscow</code>\n"
-    "/reset HH:MM - change the reset time (same timezone)\n"
+    "/reset HH:MM - change that clock time\n"
     "/status - current window and next prime\n"
-    "/prime - prime the limits right now\n"
     "/pause - pause auto-priming\n"
     "/resume - resume\n"
     "/cycle N - window length in minutes (default 300)\n"
@@ -317,10 +323,10 @@ HELP = (
 
 # Shown in Telegram's "/" command menu (registered via setMyCommands on start).
 BOT_COMMANDS = [
-    ("init", "Set reset time (anchor), e.g. 02:00 Europe/Moscow"),
-    ("reset", "Change the reset time (same timezone)"),
+    ("prime", "Limits reset now: prime & chain from now"),
+    ("reset", "Same as /prime, or /reset HH:MM for a clock time"),
+    ("init", "Schedule first prime at a clock time, e.g. 02:00 Europe/Moscow"),
     ("status", "Current window and next prime"),
-    ("prime", "Prime the limits right now"),
     ("pause", "Pause auto-priming"),
     ("resume", "Resume auto-priming"),
     ("cycle", "Window length in minutes (default 300)"),
@@ -376,19 +382,23 @@ def handle_command(cfg: dict, text: str, chat_id) -> None:
         except ValueError:
             reply("Time format is HH:MM, e.g. 02:00")
             return
-        reply("✅ Anchor set.\n" + status_text(load_config(), state))
+        reply("✅ Schedule set (replaces any previous - one schedule only).\n"
+              + status_text(load_config(), state))
         return
 
     if cmd in ("/reset", "/setreset"):
+        # No time = "limits reset right now" -> prime now and chain from here.
         if not args:
-            reply("Provide a time: <code>/reset 02:00</code>")
+            reply("⏳ Treating as: limits reset now. Priming...")
+            do_prime(load_config(), load_state(), reason="reset-now")
             return
         try:
             state = set_anchor(load_config(), args[0])
         except ValueError:
-            reply("Time format is HH:MM, e.g. 02:00")
+            reply("Time format is HH:MM, e.g. 02:00 (or /reset with no time = reset now)")
             return
-        reply("✅ Reset time updated.\n" + status_text(load_config(), state))
+        reply("✅ Reset time updated (replaces any previous - one schedule only).\n"
+              + status_text(load_config(), state))
         return
 
     if cmd == "/prime":

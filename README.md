@@ -29,6 +29,21 @@ One Python process (stdlib only, no dependencies) does both jobs:
 - **Telegram bot** — long-polls for commands so you can set/adjust everything
   from chat, and sends a notification on every prime.
 
+## The schedule model
+
+There is always **exactly one schedule**, and **your last command is the single
+source of truth** — it fully replaces whatever was scheduled before. There are
+no overlapping jobs, no cron entries, no leftover timers.
+
+- `/prime` (or `/reset` with no time) means *"my limits just reset now"* — it
+  primes immediately and chains every 5h from this moment.
+- `/init HH:MM [Zone]` (or `/reset HH:MM`) schedules the **first** prime at a
+  clock time; after it fires, the chain continues every 5h from each actual
+  prime.
+
+So pick whichever matches what just happened: hit `/prime` when you notice your
+limits reset, or `/init` once if you know the clock time they reset at.
+
 ## Requirements
 
 - [Claude Code CLI](https://claude.com/claude-code) installed and logged into
@@ -71,10 +86,10 @@ up in the `/` menu with descriptions.
 
 | Command | What it does |
 |---|---|
-| `/init HH:MM [Zone]` | set the reset time (anchor) and schedule |
-| `/reset HH:MM` | change the reset time (same timezone) |
+| `/prime` | limits reset now: prime & chain from now (single source of truth) |
+| `/reset` | same as `/prime`; `/reset HH:MM` changes the clock time |
+| `/init HH:MM [Zone]` | schedule the first prime at a clock time |
 | `/status` | current window and next prime |
-| `/prime` | prime the limits right now |
 | `/pause` / `/resume` | pause / resume auto-priming |
 | `/cycle N` | window length in minutes (default 300) |
 | `/margin N` | minutes after reset to prime (default 3) |
