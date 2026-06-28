@@ -1,0 +1,17 @@
+[Unit]
+Description=claude-limit-primer (Telegram bot + 5h limit scheduler)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Make sure the `claude` CLI and python3 are reachable. Add your install
+# locations here if needed (e.g. Homebrew/Linuxbrew, nvm, asdf).
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/projects/claude-limit-primer
+ExecStart=/usr/bin/env python3 %h/projects/claude-limit-primer/primer.py bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
