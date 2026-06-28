@@ -66,6 +66,9 @@ Send `/start` to your bot (it links your chat), then set your reset time:
 
 ## Bot commands
 
+On startup the bot registers these with Telegram (`setMyCommands`), so they show
+up in the `/` menu with descriptions.
+
 | Command | What it does |
 |---|---|
 | `/init HH:MM [Zone]` | set the reset time (anchor) and schedule |

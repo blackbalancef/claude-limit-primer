@@ -315,6 +315,35 @@ HELP = (
 )
 
 
+# Shown in Telegram's "/" command menu (registered via setMyCommands on start).
+BOT_COMMANDS = [
+    ("init", "Set reset time (anchor), e.g. 02:00 Europe/Moscow"),
+    ("reset", "Change the reset time (same timezone)"),
+    ("status", "Current window and next prime"),
+    ("prime", "Prime the limits right now"),
+    ("pause", "Pause auto-priming"),
+    ("resume", "Resume auto-priming"),
+    ("cycle", "Window length in minutes (default 300)"),
+    ("margin", "Minutes after reset to prime (default 3)"),
+    ("tz", "Set timezone, e.g. Europe/Moscow"),
+    ("help", "Show help"),
+]
+
+
+def register_commands(cfg: dict) -> None:
+    """Register the command menu so they appear under '/' in Telegram."""
+    token = cfg.get("telegram_token", "")
+    if not token:
+        return
+    cmds = [{"command": c, "description": d} for c, d in BOT_COMMANDS]
+    try:
+        res = tg_api(token, "setMyCommands", {"commands": json.dumps(cmds)}, timeout=20)
+        log("bot: commands registered" if res.get("ok")
+            else f"bot: setMyCommands ok=false: {res}")
+    except Exception as e:  # noqa: BLE001
+        log(f"setMyCommands failed: {e}")
+
+
 def handle_command(cfg: dict, text: str, chat_id) -> None:
     parts = text.strip().split()
     cmd = parts[0].lower().split("@")[0]   # strip @botname
@@ -419,6 +448,7 @@ def cmd_bot(args) -> None:
         sys.exit(1)
 
     log("bot: started")
+    register_commands(cfg)
     if cfg.get("telegram_chat_id"):
         tg_send(cfg, "🟢 Primer started.\n" + status_text(cfg, load_state()))
 
