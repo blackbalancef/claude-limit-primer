@@ -265,6 +265,22 @@ def set_plan(cfg: dict, end_str: str, tz: str | None = None) -> dict:
     return state
 
 
+def fmt_dur(seconds: float) -> str:
+    """Human-readable countdown, e.g. '1 hour 5 minutes' or '5 minutes'."""
+    if seconds < 60:
+        return "less than a minute"
+    total_min = int(seconds // 60)
+    hours, mins = divmod(total_min, 60)
+
+    def pl(n, word):
+        return f"{n} {word}{'s' if n != 1 else ''}"
+    if hours and mins:
+        return f"{pl(hours, 'hour')} {pl(mins, 'minute')}"
+    if hours:
+        return pl(hours, "hour")
+    return pl(mins, "minute")
+
+
 def status_text(cfg: dict, state: dict) -> str:
     if not state.get("next_prime_epoch"):
         return ("No anchor set. Use <code>/init HH:MM [Zone]</code>\n"
@@ -283,8 +299,8 @@ def status_text(cfg: dict, state: dict) -> str:
         lines.append(f"✔️ Last prime: {fmt(state['last_prime_epoch'], cfg)} ({ok})")
     nr = state["next_reset_epoch"]
     np = state["next_prime_epoch"]
-    lines.append(f"⏳ Next reset: <b>{fmt(nr, cfg)}</b> (in {(nr-now)/3600:.1f} h)")
-    lines.append(f"🤖 Next prime: {fmt(np, cfg)} (in {(np-now)/3600:.1f} h)")
+    lines.append(f"⏳ Next reset: <b>{fmt(nr, cfg)}</b> (in {fmt_dur(nr-now)})")
+    lines.append(f"🤖 Next prime: {fmt(np, cfg)} (in {fmt_dur(np-now)})")
     if state.get("plan_end"):
         try:
             pe = datetime.fromisoformat(state["plan_end"])
