@@ -44,6 +44,69 @@ no overlapping jobs, no cron entries, no leftover timers.
 So pick whichever matches what just happened: hit `/prime` when you notice your
 limits reset, or `/init` once if you know the clock time they reset at.
 
+## Smart reset: `/plan`
+
+`/plan` schedules a reset to land at the **end** of a work session you already
+know about, so heavy usage gets topped up the moment you finish — instead of
+leaving you locked out for hours waiting for the next boundary.
+
+```
+/plan 08:00 10:00                  # work 08:00–10:00; reset lands at 10:00
+/plan 08:00 10:00 Europe/Moscow
+```
+
+**How it places the window.** The session should sit inside one fresh window
+that *expires* at `END`. So the bot primes at `END − cycle` (e.g. `10:00 − 5h =
+05:00`), opening the window `[05:00, 10:00]`:
+
+```
+  05:00              08:00              10:00
+   │ prime opens       │ you work         │ window expires
+   │ a fresh window    │ (full budget)    │ → resets to full
+   ▼                   ▼                  ▼
+ ───●────────────────────────────────────●────►
+   └──── window [05:00, 10:00] ──────────┘
+```
+
+- At 08:00 the window is **fresh** — only the primer's throwaway `pong` has
+  touched it since 05:00.
+- At 10:00 it **expires → resets to full**, exactly as your session ends.
+
+**Why the *end*, not the start?** If a fresh window started right when you
+began working (`[08:01, 13:01]`), you'd burn through the limit around 10:00 and
+then wait until 13:01 for relief — i.e. you'd be back to stretching one window
+over the full 5 hours. Putting the boundary at the end keeps any lockout short
+(often zero).
+
+**The dormant gap is intentional.** A prime only *starts* a window; nothing
+runs while idle. So between the moment the previous window expires and the
+moment the plan's prime fires, **nothing primes** — the system is dormant: the
+limits are full, but no window is open and the 5-hour countdown is **not**
+running. `/plan` simply overwrites the single pending `next_prime` (see
+[The schedule model](#the-schedule-model)); there is no second timer firing in
+between.
+
+### When `/plan` refuses (safety guard)
+
+A request can start a fresh window **only after** the previous one expired. So
+if your `END − 5h` falls *before* the current window expires, the plan's prime
+would fire into a live window and just spend it — resetting nothing. The bot
+detects this and refuses instead of silently setting a broken plan, telling you
+the earliest end time that works or to wait and retry:
+
+> 🚫 Can't reset at 23:00: the current window is still live until Jul 02 19:27,
+> but the plan needs to open a fresh window at 18:00 (= END − 5h) — earlier than
+> that expiry. Plan a session ending no earlier than Jul 03 00:30, or wait
+> until after 19:27 and set the plan again.
+
+> ⚠️ The primer only controls **its own** primes. If you use Claude yourself
+> during the dormant gap, your request starts a window and can throw the plan
+> off. During the gap, just let it sleep.
+
+**Typical use:** run `/plan 08:00 10:00` the evening before. The dormant gap
+is simply overnight, and you wake up to a fresh window aligned with your
+morning session.
+
 ## Requirements
 
 - [Claude Code CLI](https://claude.com/claude-code) installed and logged into
@@ -89,6 +152,7 @@ up in the `/` menu with descriptions.
 | `/prime` | limits reset now: prime & chain from now (single source of truth) |
 | `/reset` | same as `/prime`; `/reset HH:MM` changes the clock time |
 | `/init HH:MM [Zone]` | schedule the first prime at a clock time |
+| `/plan START END [Zone]` | reset the window at the **end** of a work session (smart reset) |
 | `/status` | current window and next prime |
 | `/pause` / `/resume` | pause / resume auto-priming |
 | `/cycle N` | window length in minutes (default 300) |
@@ -99,6 +163,7 @@ up in the `/` menu with descriptions.
 ## CLI (same thing without chat)
 ```bash
 python3 primer.py init --reset 02:00 --tz Europe/Moscow
+python3 primer.py plan --start 08:00 --end 10:00   # reset at end of session
 python3 primer.py status
 python3 primer.py prime          # prime now
 python3 primer.py test-telegram  # check notifications
