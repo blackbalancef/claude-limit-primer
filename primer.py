@@ -25,7 +25,7 @@ Run modes
 ---------
   primer.py bot                       run the Telegram bot + scheduler (main)
   primer.py init --reset HH:MM --tz Z set anchor from the CLI
-  primer.py plan --end HH:MM [--start HH:MM]  reset at a chosen time
+  primer.py plan --end HH:MM            reset at a chosen time
   primer.py tick                      prime once if due (cron alternative)
   primer.py prime                     force a prime now
   primer.py status                    print window state
@@ -207,17 +207,13 @@ class PlanError(ValueError):
     would fire into a still-live window and fail to reset it."""
 
 
-def set_plan(cfg: dict, start_str: str | None, end_str: str, tz: str | None = None) -> dict:
+def set_plan(cfg: dict, end_str: str, tz: str | None = None) -> dict:
     """Schedule a prime so the limit window RESETS exactly at END.
 
-    Only END drives the schedule: the bot primes at END - cycle, opening the
-    window [END - cycle, END], which is fresh at the start of your session and
-    expires (resets to full) right at END - so heavy usage gets topped up the
-    moment you finish, instead of leaving you locked out for hours.
-
-    START is optional and affects nothing about WHERE the window lands: it only
-    lets the caller warn if the session is longer than one window, and is shown
-    in /status. Omit it for a plain "reset at END".
+    The bot primes at END - cycle, opening the window [END - cycle, END], which
+    is fresh from END - cycle and expires (resets to full) right at END - so you
+    get topped up at the moment you chose, instead of waiting for the chain's
+    next boundary.
     """
     if tz:
         cfg["tz"] = tz
@@ -226,24 +222,15 @@ def set_plan(cfg: dict, start_str: str | None, end_str: str, tz: str | None = No
     now = datetime.now(tz_i)
     eh, em = map(int, end_str.strip().split(":"))
     end = now.replace(hour=eh, minute=em, second=0, microsecond=0)
-    if start_str:
-        sh, sm = map(int, start_str.strip().split(":"))
-        start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-        if end <= start:
-            raise ValueError("end must be after start")
-    else:
-        start = None
 
     cycle = timedelta(minutes=cfg["cycle_minutes"])
     margin = timedelta(minutes=cfg["margin_minutes"])
 
-    # Open the session window with a prime at END - cycle so it expires exactly
+    # Open the window with a prime at END - cycle so it expires exactly
     # at END. Roll forward a day at a time until that prime is in the future
     # (a prime can only be scheduled, never back-dated).
     target_prime = end - cycle
     while target_prime <= now:
-        if start is not None:
-            start += timedelta(days=1)
         end += timedelta(days=1)
         target_prime += timedelta(days=1)
 
@@ -263,14 +250,10 @@ def set_plan(cfg: dict, start_str: str | None, end_str: str, tz: str | None = No
                 f"until {cur_reset:%b %d %H:%M}, but the plan needs to open a "
                 f"fresh window at {target_prime:%H:%M} (= END - "
                 f"{cfg['cycle_minutes'] // 60}h) - earlier than that expiry. "
-                f"Plan a session ending no earlier than {earliest:%b %d %H:%M}, "
-                f"or wait until after {cur_reset:%H:%M} and set the plan again."
+                f"Plan no earlier than {earliest:%b %d %H:%M}, or wait until "
+                f"after {cur_reset:%H:%M} and set the plan again."
             )
 
-    if start is not None:
-        state["plan_start"] = start.isoformat()
-    else:
-        state.pop("plan_start", None)
     state.update({
         "plan_end": end.isoformat(),
         "next_reset_epoch": (target_prime - margin).timestamp(),
@@ -306,12 +289,7 @@ def status_text(cfg: dict, state: dict) -> str:
         try:
             pe = datetime.fromisoformat(state["plan_end"])
             f = "%Y-%m-%d %H:%M"
-            if state.get("plan_start"):
-                ps = datetime.fromisoformat(state["plan_start"])
-                lines.append(f"📅 Plan: {ps.strftime(f)} → {pe.strftime(f)} "
-                             "(window resets at end)")
-            else:
-                lines.append(f"📅 Plan: reset at {pe.strftime(f)}")
+            lines.append(f"📅 Plan: reset at {pe.strftime(f)}")
         except Exception:  # noqa: BLE001 - display only
             pass
     if paused:
@@ -408,8 +386,7 @@ HELP = (
     "/init HH:MM [Zone] - schedule the first prime at a clock time\n"
     "   e.g. <code>/init 02:00 Europe/Moscow</code>\n"
     "/plan END [Zone] - reset the window at a chosen time (smart reset)\n"
-    "   <code>/plan 10:00</code> (or <code>/plan 08:00 10:00</code> to also\n"
-    "   warn if the session is longer than one window)\n"
+    "   e.g. <code>/plan 10:00</code>\n"
     "/reset HH:MM - change that clock time\n"
     "/status - current window and next prime\n"
     "/pause - pause auto-priming\n"
@@ -490,19 +467,14 @@ def handle_command(cfg: dict, text: str, chat_id) -> None:
     if cmd == "/plan":
         if not args:
             reply("Reset the window at a chosen time: <code>/plan END [Zone]</code>\n"
-                  "or validate a session: <code>/plan START END [Zone]</code>\n"
-                  "e.g. <code>/plan 10:00</code> or <code>/plan 08:00 10:00</code>\n"
-                  "Only END decides where the window lands; START is optional\n"
-                  "(warns only if the session is longer than one window).")
+                  "e.g. <code>/plan 10:00</code> or <code>/plan 10:00 Europe/Moscow</code>")
             return
         # HH:MM always contains ":", a timezone never does -> split on that.
         times = [a for a in args if ":" in a]
         tzargs = [a for a in args if ":" not in a]
-        if not times or len(times) > 2 or len(tzargs) > 1:
-            reply("Usage: <code>/plan END [Zone]</code> or "
-                  "<code>/plan START END [Zone]</code>\n"
-                  "e.g. <code>/plan 10:00</code> or "
-                  "<code>/plan 08:00 10:00</code>")
+        if len(times) != 1 or len(tzargs) > 1:
+            reply("Usage: <code>/plan END [Zone]</code>\n"
+                  "e.g. <code>/plan 10:00</code>")
             return
         tz = tzargs[0].strip("[]") if tzargs else None
         if tz:
@@ -511,29 +483,18 @@ def handle_command(cfg: dict, text: str, chat_id) -> None:
             except ZoneInfoNotFoundError:
                 reply(f"Unknown timezone: {tz}. Example: Europe/Moscow")
                 return
-        start = times[0] if len(times) == 2 else None
-        end = times[-1]
         try:
-            state = set_plan(load_config(), start, end, tz)
+            state = set_plan(load_config(), times[0], tz)
         except PlanError as e:
             reply("🚫 " + str(e))
             return
         except ValueError:
-            reply("Use HH:MM with START before END, e.g. "
-                  "<code>/plan 08:00 10:00</code>")
+            reply("Time format is HH:MM, e.g. <code>/plan 10:00</code>")
             return
         cfg2 = load_config()
         pe = datetime.fromisoformat(state["plan_end"])
-        msg = (f"✅ Plan set - the window will reset at "
-               f"<b>{pe:%H:%M}</b> on {pe:%Y-%m-%d}.\n")
-        if state.get("plan_start"):
-            ps = datetime.fromisoformat(state["plan_start"])
-            session_h = (pe - ps).total_seconds() / 3600
-            if session_h > cfg2["cycle_minutes"] / 60 + 1e-6:
-                msg += (f"⚠️ Session is {session_h:.1f}h (longer than the "
-                        f"{cfg2['cycle_minutes']/60:.1f}h window): a reset will "
-                        "happen mid-session.\n")
-        reply(msg + status_text(cfg2, state))
+        reply(f"✅ Plan set - the window will reset at <b>{pe:%H:%M}</b> "
+              f"on {pe:%Y-%m-%d}.\n" + status_text(cfg2, state))
         return
 
     if cmd in ("/reset", "/setreset"):
@@ -677,24 +638,15 @@ def cmd_init(args) -> None:
 
 
 def cmd_plan(args) -> None:
-    cfg = load_config()
     try:
-        state = set_plan(cfg, args.start, args.end, args.tz)
+        state = set_plan(load_config(), args.end, args.tz)
     except PlanError as e:
         print("Plan not set:", e)
         return
     except ValueError:
-        print("Use HH:MM with START before END.")
+        print("Time format is HH:MM.")
         return
     print(_plain(status_text(load_config(), state)))
-    if state.get("plan_start"):
-        ps = datetime.fromisoformat(state["plan_start"])
-        pe = datetime.fromisoformat(state["plan_end"])
-        session_h = (pe - ps).total_seconds() / 3600
-        if session_h > cfg["cycle_minutes"] / 60 + 1e-6:
-            print(f"\nNote: session is {session_h:.1f}h, longer than the "
-                  f"{cfg['cycle_minutes']/60:.1f}h window - a reset will happen "
-                  "mid-session.")
 
 
 def cmd_tick(args) -> None:
@@ -730,8 +682,7 @@ def main() -> None:
     pi.set_defaults(func=cmd_init)
 
     pp = sub.add_parser("plan", help="reset window at a chosen time")
-    pp.add_argument("--start", help="session start HH:MM (local, optional)")
-    pp.add_argument("--end", required=True, help="session end HH:MM (local)")
+    pp.add_argument("--end", required=True, help="reset time HH:MM (local)")
     pp.add_argument("--tz", help="timezone, e.g. Europe/Moscow")
     pp.set_defaults(func=cmd_plan)
 

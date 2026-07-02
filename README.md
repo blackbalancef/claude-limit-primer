@@ -46,42 +46,29 @@ limits reset, or `/init` once if you know the clock time they reset at.
 
 ## Smart reset: `/plan`
 
-`/plan` schedules a reset to land at the **end** of a work session you already
-know about, so heavy usage gets topped up the moment you finish — instead of
-leaving you locked out for hours waiting for the next boundary.
+`/plan` schedules a reset to land at a time **you** choose, so you get topped up
+at the moment you want — instead of waiting for the chain's next boundary.
 
 ```
 /plan 10:00                        # reset the window at 10:00
-/plan 08:00 10:00                  # same, plus warn if the session > one window
-/plan 08:00 10:00 Europe/Moscow
+/plan 10:00 Europe/Moscow
 ```
 
-Only `END` decides where the window lands. `START` is optional — it's used
-solely to warn you if the session is longer than one window, and to show the
-range in `/status`. If you just want "reset at 10:00", use `/plan 10:00`.
-
-**How it places the window.** The session should sit inside one fresh window
-that *expires* at `END`. So the bot primes at `END − cycle` (e.g. `10:00 − 5h =
-05:00`), opening the window `[05:00, 10:00]`:
+**How it places the window.** The bot primes at `END − cycle` (e.g. `10:00 − 5h
+= 05:00`), opening the window `[05:00, 10:00]`:
 
 ```
-  05:00              08:00              10:00
-   │ prime opens       │ you work         │ window expires
-   │ a fresh window    │ (full budget)    │ → resets to full
-   ▼                   ▼                  ▼
- ───●────────────────────────────────────●────►
-   └──── window [05:00, 10:00] ──────────┘
+  05:00                               10:00
+   │ prime opens                        │ window expires
+   │ a fresh window                     │ → resets to full
+   ▼                                    ▼
+ ───●───────────────────────────────────●────►
+   └──── window [05:00, 10:00] ─────────┘
 ```
 
-- At 08:00 the window is **fresh** — only the primer's throwaway `pong` has
-  touched it since 05:00.
-- At 10:00 it **expires → resets to full**, exactly as your session ends.
-
-**Why the *end*, not the start?** If a fresh window started right when you
-began working (`[08:01, 13:01]`), you'd burn through the limit around 10:00 and
-then wait until 13:01 for relief — i.e. you'd be back to stretching one window
-over the full 5 hours. Putting the boundary at the end keeps any lockout short
-(often zero).
+- The window is **fresh** from 05:00 — only the primer's throwaway `pong` has
+  touched it.
+- At 10:00 it **expires → resets to full**, exactly the moment you asked for.
 
 **The dormant gap is intentional.** A prime only *starts* a window; nothing
 runs while idle. So between the moment the previous window expires and the
@@ -97,20 +84,20 @@ A request can start a fresh window **only after** the previous one expired. So
 if your `END − 5h` falls *before* the current window expires, the plan's prime
 would fire into a live window and just spend it — resetting nothing. The bot
 detects this and refuses instead of silently setting a broken plan, telling you
-the earliest end time that works or to wait and retry:
+the earliest time that works or to wait and retry:
 
 > 🚫 Can't reset at 23:00: the current window is still live until Jul 02 19:27,
 > but the plan needs to open a fresh window at 18:00 (= END − 5h) — earlier than
-> that expiry. Plan a session ending no earlier than Jul 03 00:30, or wait
-> until after 19:27 and set the plan again.
+> that expiry. Plan no earlier than Jul 03 00:30, or wait until after 19:27 and
+> set the plan again.
 
 > ⚠️ The primer only controls **its own** primes. If you use Claude yourself
 > during the dormant gap, your request starts a window and can throw the plan
 > off. During the gap, just let it sleep.
 
-**Typical use:** run `/plan 08:00 10:00` the evening before. The dormant gap
-is simply overnight, and you wake up to a fresh window aligned with your
-morning session.
+**Typical use:** run `/plan 10:00` the evening before. The dormant gap is
+simply overnight, and you wake up to a fresh window whose reset lands right
+when you want it.
 
 ## Requirements
 
@@ -157,7 +144,7 @@ up in the `/` menu with descriptions.
 | `/prime` | limits reset now: prime & chain from now (single source of truth) |
 | `/reset` | same as `/prime`; `/reset HH:MM` changes the clock time |
 | `/init HH:MM [Zone]` | schedule the first prime at a clock time |
-| `/plan [START] END [Zone]` | reset the window at a chosen time (smart reset) |
+| `/plan END [Zone]` | reset the window at a chosen time (smart reset) |
 | `/status` | current window and next prime |
 | `/pause` / `/resume` | pause / resume auto-priming |
 | `/cycle N` | window length in minutes (default 300) |
@@ -168,7 +155,7 @@ up in the `/` menu with descriptions.
 ## CLI (same thing without chat)
 ```bash
 python3 primer.py init --reset 02:00 --tz Europe/Moscow
-python3 primer.py plan --end 10:00                # reset at 10:00 (--start optional)
+python3 primer.py plan --end 10:00                # reset at 10:00
 python3 primer.py status
 python3 primer.py prime          # prime now
 python3 primer.py test-telegram  # check notifications
