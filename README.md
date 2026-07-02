@@ -51,9 +51,14 @@ know about, so heavy usage gets topped up the moment you finish — instead of
 leaving you locked out for hours waiting for the next boundary.
 
 ```
-/plan 08:00 10:00                  # work 08:00–10:00; reset lands at 10:00
+/plan 10:00                        # reset the window at 10:00
+/plan 08:00 10:00                  # same, plus warn if the session > one window
 /plan 08:00 10:00 Europe/Moscow
 ```
+
+Only `END` decides where the window lands. `START` is optional — it's used
+solely to warn you if the session is longer than one window, and to show the
+range in `/status`. If you just want "reset at 10:00", use `/plan 10:00`.
 
 **How it places the window.** The session should sit inside one fresh window
 that *expires* at `END`. So the bot primes at `END − cycle` (e.g. `10:00 − 5h =
@@ -152,7 +157,7 @@ up in the `/` menu with descriptions.
 | `/prime` | limits reset now: prime & chain from now (single source of truth) |
 | `/reset` | same as `/prime`; `/reset HH:MM` changes the clock time |
 | `/init HH:MM [Zone]` | schedule the first prime at a clock time |
-| `/plan START END [Zone]` | reset the window at the **end** of a work session (smart reset) |
+| `/plan [START] END [Zone]` | reset the window at a chosen time (smart reset) |
 | `/status` | current window and next prime |
 | `/pause` / `/resume` | pause / resume auto-priming |
 | `/cycle N` | window length in minutes (default 300) |
@@ -163,7 +168,7 @@ up in the `/` menu with descriptions.
 ## CLI (same thing without chat)
 ```bash
 python3 primer.py init --reset 02:00 --tz Europe/Moscow
-python3 primer.py plan --start 08:00 --end 10:00   # reset at end of session
+python3 primer.py plan --end 10:00                # reset at 10:00 (--start optional)
 python3 primer.py status
 python3 primer.py prime          # prime now
 python3 primer.py test-telegram  # check notifications
