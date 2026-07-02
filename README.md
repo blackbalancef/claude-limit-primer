@@ -73,6 +73,7 @@ last command always wins — there is exactly one schedule, ever.
 - [Smart reset: `/plan`](#smart-reset-plan)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [AI agent setup](./AI_SETUP.md)
 - [Bot commands](#bot-commands)
 - [CLI](#cli-same-thing-without-chat)
 - [Configuration](#configuration)
@@ -183,6 +184,13 @@ Send `/start` to your bot (it links your chat), then set your reset time:
 ```
 /init 02:00 Europe/Moscow
 ```
+
+## 🤖 AI agent setup
+
+Want an AI agent to install this for you? **[`AI_SETUP.md`](./AI_SETUP.md)** is a
+step-by-step runbook an agent can follow end-to-end — clone, configure `.env`,
+install the systemd unit, verify, and confirm a real prime fires — with the
+exact three things it needs to ask you for.
 
 ## Bot commands
 
