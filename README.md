@@ -1,33 +1,83 @@
-# claude-limit-primer
+# 🤖 claude-limit-primer
 
-A tiny Telegram bot that keeps your **Claude Code subscription usage window
-always ticking**. It runs on your server and, every 5 hours (anchored to your
-reset time), sends a minimal `claude -p` request so the 5-hour limit clock
-starts when *you* want it to — not only when you manually send the first message
-of the day. It also pings you on Telegram every time it primes.
+> Keep your Claude Code usage window **warmed up and aligned with your day** —
+> not with whatever random moment you happen to open the app.
 
-## Why
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Dependencies: 0](https://img.shields.io/badge/dependencies-0-44cc11.svg)](./primer.py)
+[![Single file](https://img.shields.io/badge/single%20file-primer.py-informational.svg)](./primer.py)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)](#requirements)
+[![GitHub stars](https://img.shields.io/github/stars/blackbalancef/claude-limit-primer?style=social)](https://github.com/blackbalancef/claude-limit-primer/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/blackbalancef/claude-limit-primer)](https://github.com/blackbalancef/claude-limit-primer/commits/main)
 
-Claude Code's 5-hour limit window only starts counting from your **first**
-request after a reset. If your limits reset overnight but you don't open Claude
-until the morning, that fresh window hasn't started yet — so you lose part of it.
-This bot starts the window on a schedule, so capacity lines up with your day.
+**claude-limit-primer** is a tiny, dependency-free service that keeps your
+Claude Code subscription usage window ticking on a schedule **you** control.
+Set it once, forget it, get a Telegram ping every time it primes — and use
+`/plan` to land a fresh window exactly when you need it.
 
-The catch: you can only **restart** the clock with a request sent *after* the
-current window has expired. Priming before expiry just spends a sliver of the
-current window and resets nothing. So every prime is scheduled a few minutes
-**after** the expected reset (`margin_minutes`), never before.
+---
 
-> Note: a true 5-hour cycle doesn't divide evenly into a 24-hour day
-> (24 / 5 = 4.8), so fixed cron times would drift by an hour each day. The bot
-> computes `next prime = previous prime + 5h` dynamically instead.
+## 🤔 The problem
 
-## How it works
+Claude Code's plan runs in a **5-hour usage window**. Two things make it hard
+to plan around:
 
-One Python process (stdlib only, no dependencies) does both jobs:
-- **Scheduler** — primes the limits when the window is due.
-- **Telegram bot** — long-polls for commands so you can set/adjust everything
-  from chat, and sends a notification on every prime.
+1. **The window opens on your *first* request** — not on a fixed clock. So it
+   opens at whatever random moment you start working, and the next reset
+   follows from there.
+2. **5 hours don't fit a day** (`24 ÷ 5 = 4.8`). Reset times drift by roughly
+   an hour every day, so there's no stable *"my limits reset at 9am"* to rely
+   on.
+
+The result: you can never predict when you'll be topped up, and you often get
+caught mid-session with the window expiring at the worst moment.
+
+**primer** flips that around — *you* decide when the window opens and when it
+resets, and a tiny automated request does the opening for you.
+
+## ✨ Features
+
+- **🕐 Time the window yourself** — opens the 5-hour window on a schedule you
+  set, instead of at random.
+- **🎯 Smart reset (`/plan`)** — land a fresh window exactly at a time you
+  choose, so you start and end work topped up.
+- **🤖 Telegram control** — set, adjust, pause and watch it all from chat;
+  pinged on every prime.
+- **🪶 Zero dependencies** — one stdlib-only Python file, nothing to
+  `pip install`.
+- **🔁 Self-healing** — systemd auto-restart + `enable-linger`, survives
+  reboots and logouts.
+- **🔒 Single-chat lock** — binds to your chat and ignores everyone else.
+
+## 🔧 How it works
+
+One process does two jobs:
+
+- a **scheduler** that fires a one-word `claude -p` request the moment a window
+  is due — a few minutes *after* each reset (priming earlier just spends the
+  live window and resets nothing) — then chains the next one 5h later;
+- a **Telegram bot** that long-polls for your commands and notifies you on
+  every prime.
+
+All scheduling state is a single `next_prime` timestamp in `state.json`. Your
+last command always wins — there is exactly one schedule, ever.
+
+> A true 5-hour cycle doesn't divide evenly into 24h, so fixed cron times would
+> drift by an hour each day. The bot computes `next prime = previous prime + 5h`
+> dynamically instead.
+
+## 📑 Table of contents
+
+- [The schedule model](#the-schedule-model)
+- [Smart reset: `/plan`](#smart-reset-plan)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Bot commands](#bot-commands)
+- [CLI](#cli-same-thing-without-chat)
+- [Configuration](#configuration)
+- [Security](#security)
+- [Cost](#cost)
 
 ## The schedule model
 
@@ -106,7 +156,7 @@ when you want it.
 - Python 3.9+ (uses the stdlib `zoneinfo`).
 - A Telegram bot token.
 
-## Setup
+## Quick start
 
 ### 1. Create a Telegram bot
 1. Message **@BotFather** → `/newbot` → copy the **token**.
