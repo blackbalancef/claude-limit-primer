@@ -34,10 +34,15 @@ Run modes
 No third-party dependencies (urllib + stdlib only).
 """
 
+from __future__ import annotations
+
 import argparse
+import html
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -60,6 +65,7 @@ DEFAULT_CONFIG = {
     "margin_minutes": 3,           # prime this many minutes AFTER the reset
     "prompt": "Reply with exactly one word: pong",
     "claude_timeout_secs": 120,
+    "failure_retry_minutes": 10,
     "notify_on_prime": True,
     "notify_on_failure": True,
 }
@@ -72,7 +78,7 @@ def load_env() -> dict:
     """Tiny KEY=VALUE .env parser (no dependency)."""
     env = {}
     if ENV_PATH.exists():
-        for raw in ENV_PATH.read_text().splitlines():
+        for raw in ENV_PATH.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -84,7 +90,7 @@ def load_env() -> dict:
 def load_config() -> dict:
     cfg = dict(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
-        cfg.update(json.loads(CONFIG_PATH.read_text()))
+        cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
     # .env overrides config (secrets live here, never in config.json)
     env = load_env()
     if env.get("TELEGRAM_TOKEN"):
@@ -92,6 +98,31 @@ def load_config() -> dict:
     if env.get("TELEGRAM_CHAT_ID"):
         cfg["telegram_chat_id"] = env["TELEGRAM_CHAT_ID"]
     return cfg
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write a file atomically to avoid truncated JSON on crashes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp_path.replace(path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def write_json_atomic(path: Path, data: dict) -> None:
+    write_text_atomic(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
 def save_config(cfg: dict) -> None:
@@ -102,17 +133,17 @@ def save_config(cfg: dict) -> None:
         out["telegram_token"] = ""
     if env.get("TELEGRAM_CHAT_ID"):
         out["telegram_chat_id"] = ""
-    CONFIG_PATH.write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+    write_json_atomic(CONFIG_PATH, out)
 
 
 def load_state() -> dict:
     if STATE_PATH.exists():
-        return json.loads(STATE_PATH.read_text())
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
     return {}
 
 
 def save_state(state: dict) -> None:
-    STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+    write_json_atomic(STATE_PATH, state)
 
 
 def tzinfo(cfg: dict) -> ZoneInfo:
@@ -126,6 +157,11 @@ def fmt(epoch, cfg: dict) -> str:
     if not epoch:
         return "-"
     return datetime.fromtimestamp(epoch, tzinfo(cfg)).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def h(value) -> str:
+    """Escape dynamic text embedded into Telegram HTML messages."""
+    return html.escape(str(value), quote=False)
 
 
 def log(msg: str) -> None:
@@ -197,6 +233,11 @@ def set_anchor(cfg: dict, reset_str: str, tz: str | None = None) -> dict:
         "next_prime_epoch": first_prime.timestamp(),
         "paused": False,
     })
+    for key in (
+        "plan_start", "plan_end", "plan_start_epoch", "plan_end_epoch",
+        "retry_after_failure", "retry_reason",
+    ):
+        state.pop(key, None)
     state.setdefault("last_prime_epoch", None)
     save_state(state)
     return state
@@ -255,11 +296,15 @@ def set_plan(cfg: dict, end_str: str, tz: str | None = None) -> dict:
             )
 
     state.update({
-        "plan_end": end.isoformat(),
+        "plan_start_epoch": target_prime.timestamp(),
+        "plan_end": end.isoformat(),          # kept for backward-readable state
+        "plan_end_epoch": end.timestamp(),
         "next_reset_epoch": (target_prime - margin).timestamp(),
         "next_prime_epoch": target_prime.timestamp(),
         "paused": False,
     })
+    for key in ("anchor_reset", "retry_after_failure", "retry_reason"):
+        state.pop(key, None)
     state.setdefault("last_prime_epoch", None)
     save_state(state)
     return state
@@ -267,6 +312,8 @@ def set_plan(cfg: dict, end_str: str, tz: str | None = None) -> dict:
 
 def fmt_dur(seconds: float) -> str:
     """Human-readable countdown, e.g. '1 hour 5 minutes' or '5 minutes'."""
+    if seconds <= 0:
+        return "now"
     if seconds < 60:
         return "less than a minute"
     total_min = int(seconds // 60)
@@ -281,33 +328,58 @@ def fmt_dur(seconds: float) -> str:
     return pl(mins, "minute")
 
 
+def _plan_end_epoch(state: dict) -> float | None:
+    if state.get("plan_end_epoch"):
+        return state["plan_end_epoch"]
+    if not state.get("plan_end"):
+        return None
+    try:
+        return datetime.fromisoformat(state["plan_end"]).timestamp()
+    except Exception:  # noqa: BLE001 - display only
+        return None
+
+
 def status_text(cfg: dict, state: dict) -> str:
     if not state.get("next_prime_epoch"):
         return ("No anchor set. Use <code>/init HH:MM [Zone]</code>\n"
                 "e.g. <code>/init 02:00 Europe/Moscow</code>")
     now = time.time()
     paused = state.get("paused")
+    cycle_minutes = cfg.get("cycle_minutes", DEFAULT_CONFIG["cycle_minutes"])
+    margin_minutes = cfg.get("margin_minutes", DEFAULT_CONFIG["margin_minutes"])
     lines = [
         "📊 <b>Primer status</b>",
-        f"🌍 Timezone: {cfg['tz']}",
+        f"🌍 Timezone: {h(cfg.get('tz', 'UTC'))}",
         f"🕐 Now: {fmt(now, cfg)}",
-        f"♻️ Cycle: every {cfg['cycle_minutes']/60:.1f} h "
-        f"(prime {cfg['margin_minutes']} min after reset)",
+        f"♻️ Cycle: every {cycle_minutes/60:.1f} h "
+        f"(prime {margin_minutes} min after reset)",
     ]
     if state.get("last_prime_epoch"):
         ok = "OK" if state.get("last_prime_ok") else "FAIL"
-        lines.append(f"✔️ Last prime: {fmt(state['last_prime_epoch'], cfg)} ({ok})")
-    nr = state["next_reset_epoch"]
-    np = state["next_prime_epoch"]
-    lines.append(f"⏳ Next reset: <b>{fmt(nr, cfg)}</b> (in {fmt_dur(nr-now)})")
-    lines.append(f"🤖 Next prime: {fmt(np, cfg)} (in {fmt_dur(np-now)})")
-    if state.get("plan_end"):
-        try:
-            pe = datetime.fromisoformat(state["plan_end"])
-            f = "%Y-%m-%d %H:%M"
-            lines.append(f"📅 Plan: reset at {pe.strftime(f)}")
-        except Exception:  # noqa: BLE001 - display only
-            pass
+        line = f"✔️ Last prime: {fmt(state['last_prime_epoch'], cfg)} ({ok})"
+        if not state.get("last_prime_ok") and state.get("last_prime_detail"):
+            line += f": {h(state['last_prime_detail'])}"
+        lines.append(line)
+
+    np = state.get("next_prime_epoch")
+    pe = _plan_end_epoch(state)
+    if state.get("retry_after_failure"):
+        lines.append("⚠️ Retrying after a failed prime")
+        lines.append(f"🔁 Retry prime: <b>{fmt(np, cfg)}</b> (in {fmt_dur(np-now)})")
+        lines.append("⏳ Next reset: will be known after a successful prime")
+    elif pe:
+        ps = state.get("plan_start_epoch") or np
+        lines.append(f"📅 Planned reset: <b>{fmt(pe, cfg)}</b>")
+        lines.append(f"🤖 Planned prime: {fmt(ps, cfg)} (in {fmt_dur(ps-now)})")
+        lines.append(f"🪟 Planned window: {fmt(ps, cfg)} → {fmt(pe, cfg)}")
+    else:
+        nr = state.get("next_reset_epoch")
+        if nr:
+            lines.append(f"⏳ Next reset: <b>{fmt(nr, cfg)}</b> (in {fmt_dur(nr-now)})")
+        else:
+            lines.append("⏳ Next reset: -")
+        lines.append(f"🤖 Next prime: {fmt(np, cfg)} (in {fmt_dur(np-now)})")
+
     if paused:
         lines.append("⏸ <b>Paused</b> - auto-prime is off (/resume to enable)")
     return "\n".join(lines)
@@ -346,19 +418,39 @@ def do_prime(cfg: dict, state: dict, *, reason: str) -> None:
 
     ok, detail = run_prime(cfg)
 
-    next_reset = now + cycle
-    next_prime = next_reset + margin
     state.update({
         "last_prime_epoch": now,
         "last_prime_ok": ok,
         "last_prime_detail": detail,
-        "next_reset_epoch": next_reset,
-        "next_prime_epoch": next_prime,
     })
-    # A prime firing means the plan's target window is now live (or the user
-    # overrode it manually) - drop the one-shot plan marker either way.
-    state.pop("plan_start", None)
-    state.pop("plan_end", None)
+    # A prime attempt consumes/overrides any one-shot plan marker. On failure
+    # the exact planned reset is missed, so we retry soon instead of pretending
+    # a full new window was opened.
+    for key in ("plan_start", "plan_end", "plan_start_epoch", "plan_end_epoch"):
+        state.pop(key, None)
+
+    if ok:
+        next_reset = now + cycle
+        next_prime = next_reset + margin
+        state.update({
+            "next_reset_epoch": next_reset,
+            "next_prime_epoch": next_prime,
+            "retry_after_failure": False,
+        })
+        state.pop("retry_reason", None)
+    else:
+        try:
+            retry_minutes = int(cfg.get("failure_retry_minutes", 10))
+        except (TypeError, ValueError):
+            retry_minutes = 10
+        retry_minutes = max(1, retry_minutes)
+        next_reset = None
+        next_prime = now + retry_minutes * 60
+        state.update({
+            "next_prime_epoch": next_prime,
+            "retry_after_failure": True,
+            "retry_reason": detail,
+        })
     save_state(state)
 
     if ok:
@@ -367,7 +459,7 @@ def do_prime(cfg: dict, state: dict, *, reason: str) -> None:
             tg_send(cfg,
                     "✅ <b>Limits primed</b>\n"
                     f"🕐 Now: {fmt(now, cfg)}\n"
-                    "♻️ New 5-hour window is active\n"
+                    f"♻️ New {cfg['cycle_minutes']/60:.1f}-hour window is active\n"
                     f"⏳ Resets: <b>{fmt(next_reset, cfg)}</b>\n"
                     f"🤖 Next prime: {fmt(next_prime, cfg)}\n"
                     "🔗 Chain anchored here (the only active schedule)")
@@ -376,7 +468,7 @@ def do_prime(cfg: dict, state: dict, *, reason: str) -> None:
         if cfg.get("notify_on_failure"):
             tg_send(cfg,
                     "⚠️ <b>Failed to prime limits</b>\n"
-                    f"🕐 {fmt(now, cfg)}\n❌ {detail}\n"
+                    f"🕐 {fmt(now, cfg)}\n❌ {h(detail)}\n"
                     f"🔁 Retry: {fmt(next_prime, cfg)}")
 
 
@@ -446,6 +538,8 @@ def register_commands(cfg: dict) -> None:
 
 def handle_command(cfg: dict, text: str, chat_id) -> None:
     parts = text.strip().split()
+    if not parts:
+        return
     cmd = parts[0].lower().split("@")[0]   # strip @botname
     args = parts[1:]
 
@@ -469,7 +563,7 @@ def handle_command(cfg: dict, text: str, chat_id) -> None:
             if tz:
                 ZoneInfo(tz)  # validate
         except ZoneInfoNotFoundError:
-            reply(f"Unknown timezone: {tz}. Example: Europe/Moscow")
+            reply(f"Unknown timezone: {h(tz)}. Example: Europe/Moscow")
             return
         try:
             state = set_anchor(load_config(), args[0], tz)
@@ -497,12 +591,12 @@ def handle_command(cfg: dict, text: str, chat_id) -> None:
             try:
                 ZoneInfo(tz)
             except ZoneInfoNotFoundError:
-                reply(f"Unknown timezone: {tz}. Example: Europe/Moscow")
+                reply(f"Unknown timezone: {h(tz)}. Example: Europe/Moscow")
                 return
         try:
             state = set_plan(load_config(), times[0], tz)
         except PlanError as e:
-            reply("🚫 " + str(e))
+            reply("🚫 " + h(e))
             return
         except ValueError:
             reply("Time format is HH:MM, e.g. <code>/plan 10:00</code>")
@@ -566,12 +660,12 @@ def handle_command(cfg: dict, text: str, chat_id) -> None:
         try:
             ZoneInfo(tz)
         except ZoneInfoNotFoundError:
-            reply(f"Unknown timezone: {tz}")
+            reply(f"Unknown timezone: {h(tz)}")
             return
         cfg2 = load_config()
         cfg2["tz"] = tz
         save_config(cfg2)
-        reply(f"✅ Timezone: {tz}")
+        reply(f"✅ Timezone: {h(tz)}")
         return
 
     reply("Unknown command. /help for the list.")
@@ -632,7 +726,7 @@ def cmd_bot(args) -> None:
                 handle_command(cfg, msg["text"], chat_id)
             except Exception as e:  # noqa: BLE001
                 log(f"handle error: {e}")
-                tg_send(cfg, f"⚠️ Error: {e}", chat_id=chat_id)
+                tg_send(cfg, f"⚠️ Error: {h(e)}", chat_id=chat_id)
 
 
 # --------------------------------------------------------------------------- #

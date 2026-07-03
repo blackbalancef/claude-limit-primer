@@ -7,6 +7,7 @@
   "margin_minutes": 3,
   "prompt": "Reply with exactly one word: pong",
   "claude_timeout_secs": 120,
+  "failure_retry_minutes": 10,
   "notify_on_prime": true,
   "notify_on_failure": true
 }

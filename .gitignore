@@ -2,4 +2,5 @@
 config.json
 state.json
 *.log
+*.tmp
 __pycache__/

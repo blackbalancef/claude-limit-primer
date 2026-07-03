@@ -170,6 +170,8 @@ when you want it.
 ### 2. Run it (systemd --user, auto-restart)
 ```bash
 cp .env.example .env        # then edit .env and paste your token
+mkdir -p ~/.config/systemd/user
+cp claude-limit-primer.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now claude-limit-primer
 loginctl enable-linger "$USER"   # keep running after logout / reboot
@@ -230,6 +232,8 @@ python3 primer.py test-telegram  # check notifications
 | `cycle_minutes` | `300` | window length (5 h) |
 | `margin_minutes` | `3` | how long after a reset to prime |
 | `prompt` | `Reply with exactly one word: pong` | the throwaway prompt |
+| `claude_timeout_secs` | `120` | timeout for the `claude -p` request |
+| `failure_retry_minutes` | `10` | retry delay after a failed prime |
 | `notify_on_prime` / `notify_on_failure` | `true` | Telegram notifications |
 
 Secrets (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`) live only in `.env` and are never
