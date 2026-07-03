@@ -5,13 +5,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Make sure the `claude` CLI and python3 are reachable. Add your install
-# locations here if needed (e.g. Homebrew/Linuxbrew, nvm, asdf).
+# Make sure the `claude` CLI is reachable. Add your install locations here if
+# needed (e.g. Homebrew/Linuxbrew, nvm, asdf).
 Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/projects/claude-limit-primer
-ExecStart=/usr/bin/env python3 %h/projects/claude-limit-primer/primer.py bot
+# The `primer` entry point comes from `uv sync` (see README / AI_SETUP.md).
+ExecStart=%h/projects/claude-limit-primer/.venv/bin/primer bot
 Restart=always
 RestartSec=5
+# An in-flight prime can take ~6 min worst case (3 attempts x 120 s timeout +
+# waits + notification retries) and its worker thread cannot be cancelled.
+# Give shutdown time to let it finish and save state instead of the default
+# 90 s SIGKILL, which would lose the chain update mid-prime.
+TimeoutStopSec=420
 
 [Install]
 WantedBy=default.target

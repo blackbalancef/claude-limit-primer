@@ -4,15 +4,16 @@
 > not with whatever random moment you happen to open the app.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
-[![Dependencies: 0](https://img.shields.io/badge/dependencies-0-44cc11.svg)](./primer.py)
-[![Single file](https://img.shields.io/badge/single%20file-primer.py-informational.svg)](./primer.py)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![uv](https://img.shields.io/badge/packaging-uv-DE5FE9.svg)](https://docs.astral.sh/uv/)
+[![Ruff](https://img.shields.io/badge/lint-ruff-261230.svg)](https://docs.astral.sh/ruff/)
+[![Checked with mypy](https://img.shields.io/badge/types-mypy%20strict-blue.svg)](https://mypy-lang.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)](#requirements)
 [![GitHub stars](https://img.shields.io/github/stars/blackbalancef/claude-limit-primer?style=social)](https://github.com/blackbalancef/claude-limit-primer/stargazers)
 [![Last commit](https://img.shields.io/github/last-commit/blackbalancef/claude-limit-primer)](https://github.com/blackbalancef/claude-limit-primer/commits/main)
 
-**claude-limit-primer** is a tiny, dependency-free service that keeps your
-Claude Code subscription usage window ticking on a schedule **you** control.
+**claude-limit-primer** is a tiny service that keeps your Claude Code
+subscription usage window ticking on a schedule **you** control.
 Set it once, forget it, get a Telegram ping every time it primes — and use
 `/plan` to land a fresh window exactly when you need it.
 
@@ -44,8 +45,8 @@ resets, and a tiny automated request does the opening for you.
   choose, so you start and end work topped up.
 - **🤖 Telegram control** — set, adjust, pause and watch it all from chat;
   pinged on every prime.
-- **🪶 Zero dependencies** — one stdlib-only Python file, nothing to
-  `pip install`.
+- **🧰 Small, typed, modern** — one `uv sync` installs everything: aiogram 3
+  bot, pydantic v2 models, loguru logging, tenacity retries.
 - **🔁 Self-healing** — systemd auto-restart + `enable-linger`, survives
   reboots and logouts.
 - **🔒 Single-chat lock** — binds to your chat and ignores everyone else.
@@ -154,7 +155,7 @@ when you want it.
 
 - [Claude Code CLI](https://claude.com/claude-code) installed and logged into
   your subscription (`claude -p "hi"` should work).
-- Python 3.9+ (uses the stdlib `zoneinfo`).
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/getting-started/installation/).
 - A Telegram bot token.
 
 ## Quick start
@@ -167,8 +168,9 @@ when you want it.
    ```
    You don't need the chat id — the bot captures it from your first message.
 
-### 2. Run it (systemd --user, auto-restart)
+### 2. Install + run it (uv + systemd --user, auto-restart)
 ```bash
+uv sync                     # creates .venv with the `primer` entry point
 cp .env.example .env        # then edit .env and paste your token
 mkdir -p ~/.config/systemd/user
 cp claude-limit-primer.service ~/.config/systemd/user/
@@ -178,7 +180,7 @@ loginctl enable-linger "$USER"   # keep running after logout / reboot
 ```
 Logs: `journalctl --user -u claude-limit-primer -f` (or see `primer.log`).
 
-> Don't use systemd? Run `python3 primer.py bot` under tmux/nohup, or schedule
+> Don't use systemd? Run `uv run primer bot` under tmux/nohup, or schedule
 > `run-tick.sh` from cron (`* * * * *`) as a scheduler-only alternative.
 
 ### 3. Configure from chat
@@ -214,11 +216,11 @@ up in the `/` menu with descriptions.
 
 ## CLI (same thing without chat)
 ```bash
-python3 primer.py init --reset 02:00 --tz Europe/Moscow
-python3 primer.py plan --end 10:00                # reset at 10:00
-python3 primer.py status
-python3 primer.py prime          # prime now
-python3 primer.py test-telegram  # check notifications
+uv run primer init --reset 02:00 --tz Europe/Moscow
+uv run primer plan --end 10:00                # reset at 10:00
+uv run primer status
+uv run primer prime          # prime now
+uv run primer test-telegram  # check notifications
 ```
 
 ## Configuration
@@ -251,15 +253,24 @@ Each prime is one request to the cheapest model with a one-word reply — a few
 thousand cached tokens, ~5 times a day. On a subscription that's negligible; it
 just counts against your limits, which is the whole point.
 
+## Development
+
+```bash
+uv sync        # deps + dev tools (ruff, mypy, ty)
+uv run ruff check . && uv run ruff format --check . \
+  && uv run mypy primer && uv run ty check primer
+```
+
 ## Files
 
 | File | Purpose |
 |---|---|
-| `primer.py` | bot + scheduler (all logic) |
+| `primer/` | the package: bot (`bot.py`), scheduler (`schedule.py`, `prime.py`), models (`settings.py`, `state.py`), CLI (`cli.py`) |
+| `pyproject.toml` | project + deps + `primer` entry point + lint/type config |
 | `.env` | Telegram token (gitignored) |
 | `config.json` | settings (gitignored; see `config.example.json`) |
 | `state.json` | window state (auto-created) |
-| `primer.log` | run log |
+| `primer.log` | run log (rotated at 1 MB) |
 | `claude-limit-primer.service` | systemd --user unit |
 | `run-tick.sh` | cron wrapper (scheduler-only alternative) |
 

@@ -12,7 +12,7 @@ provide.
 
 ## What you're setting up
 
-A small background service (one Python file, **zero `pip` dependencies**) that:
+A small background service (a Python package managed with **uv**) that:
 
 1. sends a throwaway `claude -p "pong"` request every ~5 hours so the user's
    Claude Code usage window opens on a schedule **they** control;
@@ -30,13 +30,14 @@ Run these checks. If any fail, fix or escalate to the user (see
 
 | Check | Command | Expected |
 |---|---|---|
-| Python ≥ 3.9 | `python3 --version` | `Python 3.9` or higher |
+| uv present | `uv --version` | prints a version ([install](https://docs.astral.sh/uv/getting-started/installation/)) |
+| Python ≥ 3.12 | `python3 --version` | `Python 3.12` or higher (uv can also install one) |
 | Claude Code CLI present | `command -v claude` | a path, e.g. `/home/linuxbrew/.linuxbrew/bin/claude` |
 | Claude CLI logged in | `claude -p "Reply with one word: ok"` | succeeds (subscription auth works) |
 | systemd --user available | `systemctl --user status` | runs (Linux) |
 
 > **No systemd (macOS, containers)?** Skip the unit and run
-> `python3 primer.py bot` under tmux/nohup, or drive `run-tick.sh` from cron.
+> `uv run primer bot` under tmux/nohup, or drive `run-tick.sh` from cron.
 > See [Alternative: no systemd](#alternative-no-systemd).
 
 ---
@@ -64,6 +65,7 @@ Never write the token into `config.json` — it lives **only in `.env`**.
 ```bash
 git clone https://github.com/blackbalancef/claude-limit-primer.git ~/projects/claude-limit-primer
 cd ~/projects/claude-limit-primer
+uv sync        # installs dependencies and the `primer` entry point into .venv
 ```
 
 > The bundled unit expects the repo exactly at `~/projects/claude-limit-primer`.
@@ -94,7 +96,7 @@ let the user send `/tz Europe/Moscow` to the bot later.
 Sanity-check it parses:
 
 ```bash
-python3 primer.py status      # should print status, not a traceback
+uv run primer status      # should print status, not a traceback
 ```
 
 ---
@@ -137,7 +139,7 @@ loginctl enable-linger "$USER"     # keep it running after logout / reboot
 ```bash
 systemctl --user status claude-limit-primer        # Active: active (running)
 journalctl --user -u claude-limit-primer -n 20 --no-pager   # "bot: started", no errors
-python3 primer.py test-telegram                     # sends a test message IF chat is linked
+uv run primer test-telegram                         # sends a test message IF chat is linked
 ```
 
 The `test-telegram` will only deliver once the chat is linked (next step).
@@ -177,7 +179,7 @@ PRIME OK (scheduled): reply='pong' (4.2s)
 ```
 
 and the user gets a Telegram ping `✅ Limits primed`. You can also force one
-for testing with `python3 primer.py prime`.
+for testing with `uv run primer prime`.
 
 ---
 
@@ -186,7 +188,7 @@ for testing with `python3 primer.py prime`.
 All of the following are true:
 
 - [ ] `systemctl --user is-active claude-limit-primer` → `active`
-- [ ] `python3 primer.py status` shows a `Next prime` in the future
+- [ ] `uv run primer status` shows a `Next prime` in the future
 - [ ] user has sent `/start` and a schedule command; `/status` looks right to them
 - [ ] at least one `PRIME OK` appears in the log (or a forced `prime` succeeds)
 - [ ] the user received a Telegram notification
@@ -213,7 +215,7 @@ If `systemctl --user` isn't available, run the bot directly and keep it alive
 manually:
 
 ```bash
-nohup python3 primer.py bot >> primer.log 2>&1 &
+nohup .venv/bin/primer bot >> primer.log 2>&1 &
 ```
 
 …under `tmux`/`screen`, or write a macOS `launchd` plist. For a **scheduler-only**
@@ -224,4 +226,4 @@ setup (no bot), drive the tick from cron:
 ```
 
 Note: without the bot you lose Telegram control/notifications; `/init` via CLI
-still works (`python3 primer.py init --reset 02:00 --tz Europe/Moscow`).
+still works (`uv run primer init --reset 02:00 --tz Europe/Moscow`).

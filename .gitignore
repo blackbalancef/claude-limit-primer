@@ -4,3 +4,4 @@ state.json
 *.log
 *.tmp
 __pycache__/
+.venv/
